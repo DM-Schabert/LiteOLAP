@@ -53,6 +53,14 @@ class HashAggregate : public Operator {
     };
 
     void UpdateGroup(GroupState& g, const DataChunk& chunk, std::size_t row);
+    /// Builds the group key for one row and folds it into a (groups, index)
+    /// map — used per-worker on a thread-local map during parallel aggregation.
+    void ProcessRow(std::vector<GroupState>& groups,
+                    std::unordered_map<std::string, std::size_t>& index,
+                    const DataChunk& chunk, std::size_t row);
+    /// Folds a partial accumulator into a destination accumulator (the merge
+    /// step that combines per-worker partial results).
+    void MergeAcc(Acc& dst, const Acc& src) const;
     Value Finalize(const AggSpec& spec, const Acc& a) const;
 
     std::unique_ptr<Operator> child_;

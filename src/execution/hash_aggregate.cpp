@@ -1,7 +1,10 @@
 #include "execution/hash_aggregate.h"
 
+#include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <stdexcept>
+#include <thread>
 
 namespace liteolap {
 
@@ -102,6 +105,44 @@ void HashAggregate::UpdateGroup(GroupState& g, const DataChunk& chunk, std::size
     }
 }
 
+void HashAggregate::ProcessRow(std::vector<GroupState>& groups,
+                               std::unordered_map<std::string, std::size_t>& index,
+                               const DataChunk& chunk, std::size_t row) {
+    std::vector<Value> key;
+    key.reserve(group_indices_.size());
+    for (std::size_t gi : group_indices_) key.push_back(chunk.GetVector(gi).GetValue(row));
+    const std::string ks = KeyString(key);
+    auto it = index.find(ks);
+    std::size_t gidx;
+    if (it == index.end()) {
+        gidx = groups.size();
+        index.emplace(ks, gidx);
+        GroupState gs;
+        gs.key = std::move(key);
+        gs.accs.resize(aggs_.size());
+        groups.push_back(std::move(gs));
+    } else {
+        gidx = it->second;
+    }
+    UpdateGroup(groups[gidx], chunk, row);
+}
+
+void HashAggregate::MergeAcc(Acc& dst, const Acc& src) const {
+    // Field-wise merge. Each accumulator only populates the fields relevant to
+    // its aggregate kind; the rest stay 0 / null, so merging all of them is
+    // safe regardless of kind.
+    dst.count += src.count;
+    dst.nonnull += src.nonnull;
+    dst.isum += src.isum;
+    dst.dsum += src.dsum;
+    if (!IsNull(src.minv) &&
+        (IsNull(dst.minv) || CompareValues(src.minv, dst.minv) == Ordering::kLess))
+        dst.minv = src.minv;
+    if (!IsNull(src.maxv) &&
+        (IsNull(dst.maxv) || CompareValues(src.maxv, dst.maxv) == Ordering::kGreater))
+        dst.maxv = src.maxv;
+}
+
 Value HashAggregate::Finalize(const AggSpec& spec, const Acc& a) const {
     switch (spec.kind) {
         case sql::AggKind::kCountStar:
@@ -125,30 +166,61 @@ Value HashAggregate::Finalize(const AggSpec& spec, const Acc& a) const {
 
 void HashAggregate::Open() {
     child_->Open();
-    DataChunk in;
-    in.Initialize(child_->output_types());
 
+    // Drain the child fully so chunks can be aggregated in parallel.
+    std::vector<DataChunk> inputs;
     while (true) {
+        DataChunk in;
+        in.Initialize(child_->output_types());
         child_->Next(in);
         if (in.cardinality() == 0) break;
-        for (std::size_t i = 0; i < in.cardinality(); ++i) {
-            std::vector<Value> key;
-            key.reserve(group_indices_.size());
-            for (std::size_t gi : group_indices_) key.push_back(in.GetVector(gi).GetValue(i));
-            const std::string ks = KeyString(key);
-            auto it = index_.find(ks);
-            std::size_t gidx;
-            if (it == index_.end()) {
-                gidx = groups_.size();
-                index_.emplace(ks, gidx);
-                GroupState gs;
-                gs.key = std::move(key);
-                gs.accs.resize(aggs_.size());
-                groups_.push_back(std::move(gs));
-            } else {
-                gidx = it->second;
+        inputs.push_back(std::move(in));
+    }
+
+    if (!inputs.empty()) {
+        // Each worker builds its own (groups, index) map — no locking on the
+        // hot path. Workers pull chunks from a shared atomic cursor.
+        struct Partial {
+            std::vector<GroupState> groups;
+            std::unordered_map<std::string, std::size_t> index;
+        };
+
+        unsigned hw = std::thread::hardware_concurrency();
+        if (hw == 0) hw = 4;
+        const std::size_t num_workers = std::min<std::size_t>(hw, inputs.size());
+        std::vector<Partial> partials(num_workers);
+
+        std::atomic<std::size_t> next_chunk{0};
+        auto worker = [&](Partial& pr) {
+            for (;;) {
+                const std::size_t ci = next_chunk.fetch_add(1);
+                if (ci >= inputs.size()) break;
+                const DataChunk& in = inputs[ci];
+                for (std::size_t i = 0; i < in.cardinality(); ++i)
+                    ProcessRow(pr.groups, pr.index, in, i);
             }
-            UpdateGroup(groups_[gidx], in, i);
+        };
+
+        std::vector<std::thread> pool;
+        pool.reserve(num_workers);
+        for (std::size_t w = 0; w < num_workers; ++w)
+            pool.emplace_back(worker, std::ref(partials[w]));
+        for (auto& t : pool) t.join();
+
+        // Merge per-worker partials into the final groups_.
+        for (auto& pr : partials) {
+            for (auto& g : pr.groups) {
+                const std::string ks = KeyString(g.key);
+                auto it = index_.find(ks);
+                if (it == index_.end()) {
+                    index_.emplace(ks, groups_.size());
+                    groups_.push_back(std::move(g));
+                } else {
+                    GroupState& dst = groups_[it->second];
+                    for (std::size_t ai = 0; ai < aggs_.size(); ++ai)
+                        MergeAcc(dst.accs[ai], g.accs[ai]);
+                }
+            }
         }
     }
 
