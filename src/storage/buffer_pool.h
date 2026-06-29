@@ -1,9 +1,11 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <list>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <unordered_map>
 #include <vector>
 
@@ -41,7 +43,7 @@ class BufferPool {
     struct Frame {
         Page page{};
         PageId page_id{kInvalidPageId};
-        int pin_count{0};
+        std::atomic<int> pin_count{0};
         bool dirty{false};
         bool valid{false};
     };
@@ -57,7 +59,7 @@ class BufferPool {
     std::list<std::size_t> lru_;
     std::unordered_map<std::size_t, std::list<std::size_t>::iterator> lru_pos_;
     std::vector<std::size_t> free_list_;
-    mutable std::mutex mutex_;
+    mutable std::shared_mutex mutex_;
 };
 
 }  // namespace liteolap

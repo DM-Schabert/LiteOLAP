@@ -11,6 +11,8 @@ namespace liteolap {
 
 namespace {
 
+constexpr std::size_t kRowGroupSize = 100'000;
+
 /// Coerces a parsed literal to the declared column type (e.g. an integer
 /// literal into a BIGINT or FLOAT column).
 Value Coerce(const Value& v, ColumnType type) {
@@ -62,15 +64,21 @@ void DB::FlushTable(const std::string& name) {
 
     TableMeta* meta = catalog_.GetTable(name);
     if (!meta) return;
-    RowGroup rg;
-    rg.num_rows = cols[0].size();
-    rg.column_roots.resize(meta->schema.NumColumns());
-    for (std::size_t c = 0; c < meta->schema.NumColumns(); ++c) {
-        ColumnWriter w(*bp_, meta->schema.GetColumn(c).type);
-        for (const auto& v : cols[c]) w.Append(v);
-        rg.column_roots[c] = w.Finish();
+
+    const std::size_t total = cols[0].size();
+    for (std::size_t start = 0; start < total; start += kRowGroupSize) {
+        const std::size_t end = std::min(start + kRowGroupSize, total);
+        RowGroup rg;
+        rg.num_rows = end - start;
+        rg.column_roots.resize(meta->schema.NumColumns());
+        for (std::size_t c = 0; c < meta->schema.NumColumns(); ++c) {
+            ColumnWriter w(*bp_, meta->schema.GetColumn(c).type);
+            for (std::size_t r = start; r < end; ++r) w.Append(cols[c][r]);
+            rg.column_roots[c] = w.Finish();
+        }
+        catalog_.AddRowGroup(name, std::move(rg));
     }
-    catalog_.AddRowGroup(name, std::move(rg));
+
     for (auto& cv : cols) cv.clear();
     bp_->FlushAll();
     catalog_.Persist(*disk_);

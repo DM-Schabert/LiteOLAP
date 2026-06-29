@@ -76,16 +76,27 @@ std::size_t BufferPool::LoadIntoFrame(PageId page_id) {
 }
 
 Page* BufferPool::FetchPage(PageId page_id) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    // Fast path: Page already cached — shared_lock, no blocking between readers.
+    {
+        std::shared_lock<std::shared_mutex> read_lock(mutex_);
+        auto it = page_table_.find(page_id);
+        if (it != page_table_.end()) {
+            Frame& f = *frames_[it->second];
+            f.pin_count.fetch_add(1);
+            return &f.page;
+        }
+    }
+    // Slow path: cache miss — exclusive lock to load from disk.
+    std::unique_lock<std::shared_mutex> write_lock(mutex_);
     const std::size_t frame_idx = LoadIntoFrame(page_id);
     Frame& f = *frames_[frame_idx];
-    ++f.pin_count;
+    f.pin_count.fetch_add(1);
     Touch(frame_idx);
     return &f.page;
 }
 
 bool BufferPool::UnpinPage(PageId page_id, bool is_dirty) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(mutex_);
     auto it = page_table_.find(page_id);
     if (it == page_table_.end()) {
         return false;
@@ -102,7 +113,7 @@ bool BufferPool::UnpinPage(PageId page_id, bool is_dirty) {
 }
 
 bool BufferPool::FlushPage(PageId page_id) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(mutex_);
     auto it = page_table_.find(page_id);
     if (it == page_table_.end()) {
         return false;
@@ -131,7 +142,7 @@ Page* BufferPool::NewPage(PageId* out_page_id) {
 }
 
 void BufferPool::FlushAll() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(mutex_);
     for (auto& fp : frames_) {
         Frame& f = *fp;
         if (f.valid && f.dirty) {
