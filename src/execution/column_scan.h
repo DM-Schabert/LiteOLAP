@@ -1,13 +1,12 @@
 #pragma once
 
 #include <cstdint>
-#include <memory>
 #include <vector>
 
 #include "catalog/catalog.h"
-#include "column/column_reader.h"
 #include "execution/operator.h"
 #include "storage/buffer_pool.h"
+#include "vector/data_chunk.h"
 
 namespace liteolap {
 
@@ -31,15 +30,13 @@ class ColumnScan : public Operator {
     void Close() override;
 
    private:
-    bool OpenRowGroup(std::size_t rg);  ///< false if rg index out of range
-
     BufferPool& bp_;
     const TableMeta& table_;
     std::string alias_;
     std::vector<std::size_t> col_idx_;
 
-    std::size_t rg_index_{0};
-    std::vector<std::unique_ptr<ColumnReader>> readers_;
+    std::vector<DataChunk> chunks_;
+    std::size_t chunk_cursor_;
 
     bool has_zone_{false};
     std::size_t zone_pos_{0};

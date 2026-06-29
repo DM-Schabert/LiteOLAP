@@ -27,8 +27,8 @@ using namespace std::chrono;
 
 namespace {
 
-constexpr int kLineitems = 1'000'000;
-constexpr int kParts = 50'000;
+constexpr int kLineitems = 10'000'000;
+constexpr int kParts = 500'000;
 
 double Seconds(steady_clock::time_point a, steady_clock::time_point b) {
     return duration<double>(b - a).count();
