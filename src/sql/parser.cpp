@@ -130,7 +130,7 @@ class Parser {
         return ParseComparison();
     }
     std::unique_ptr<Expr> ParseComparison() {
-        auto l = ParsePrimary();
+        auto l = ParseAddSub();
         const Token& t = Peek();
         if (t.kind == TokenKind::kPunct) {
             BinOp op;
@@ -145,14 +145,14 @@ class Parser {
             auto b = std::make_unique<BinaryExpr>();
             b->op = op;
             b->left = std::move(l);
-            b->right = ParsePrimary();
+            b->right = ParseAddSub();
             return b;
         }
         if (t.kind == TokenKind::kKeyword && t.text == "BETWEEN") {
             ++pos_;
-            auto lo = ParsePrimary();
+            auto lo = ParseAddSub();
             ExpectKw("AND");
-            auto hi = ParsePrimary();
+            auto hi = ParseAddSub();
             // Desugar to (l >= lo AND l <= hi). `l` is duplicated by cloning
             // its textual form is unnecessary: BETWEEN operands are columns,
             // so we re-parse is impossible; instead share via two BinaryExprs
@@ -188,6 +188,34 @@ class Parser {
             while (MatchPunct(",")) in->values.push_back(ParseLiteral());
             ExpectPunct(")");
             return in;
+        }
+        return l;
+    }
+    // Arithmetic, lower precedence: + and -.
+    std::unique_ptr<Expr> ParseAddSub() {
+        auto l = ParseMulDiv();
+        while (Peek().kind == TokenKind::kPunct && (Peek().text == "+" || Peek().text == "-")) {
+            const BinOp op = Peek().text == "+" ? BinOp::kAdd : BinOp::kSub;
+            ++pos_;
+            auto b = std::make_unique<BinaryExpr>();
+            b->op = op;
+            b->left = std::move(l);
+            b->right = ParseMulDiv();
+            l = std::move(b);
+        }
+        return l;
+    }
+    // Arithmetic, higher precedence: * and /.
+    std::unique_ptr<Expr> ParseMulDiv() {
+        auto l = ParsePrimary();
+        while (Peek().kind == TokenKind::kPunct && (Peek().text == "*" || Peek().text == "/")) {
+            const BinOp op = Peek().text == "*" ? BinOp::kMul : BinOp::kDiv;
+            ++pos_;
+            auto b = std::make_unique<BinaryExpr>();
+            b->op = op;
+            b->left = std::move(l);
+            b->right = ParsePrimary();
+            l = std::move(b);
         }
         return l;
     }
@@ -237,14 +265,14 @@ class Parser {
                 agg->kind = AggKind::kCountStar;
             } else {
                 agg->kind = AggKind::kCount;
-                agg->argument = ParsePrimary();
+                agg->argument = ParseAddSub();
             }
         } else {
             if (fn == "SUM") agg->kind = AggKind::kSum;
             else if (fn == "AVG") agg->kind = AggKind::kAvg;
             else if (fn == "MIN") agg->kind = AggKind::kMin;
             else agg->kind = AggKind::kMax;
-            agg->argument = ParsePrimary();
+            agg->argument = ParseAddSub();
         }
         ExpectPunct(")");
         return agg;

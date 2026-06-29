@@ -76,7 +76,7 @@ void HashAggregate::UpdateGroup(GroupState& g, const DataChunk& chunk, std::size
             ++acc.count;
             continue;
         }
-        const Value v = chunk.GetVector(spec.input_index).GetValue(row);
+        const Value v = EvalExprRow(*spec.input_expr, chunk, row);
         if (IsNull(v)) continue;
         ++acc.nonnull;
         switch (spec.kind) {

@@ -10,7 +10,20 @@
 
 namespace liteolap::sql {
 
-enum class BinOp : std::uint8_t { kEq, kNe, kLt, kLe, kGt, kGe, kAnd, kOr };
+enum class BinOp : std::uint8_t {
+    kEq,
+    kNe,
+    kLt,
+    kLe,
+    kGt,
+    kGe,
+    kAnd,
+    kOr,
+    kAdd,
+    kSub,
+    kMul,
+    kDiv,
+};
 
 enum class AggKind : std::uint8_t { kCountStar, kCount, kSum, kAvg, kMin, kMax };
 

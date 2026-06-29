@@ -45,12 +45,38 @@ std::size_t Resolve(const std::vector<std::string>& names, const std::string& al
     return matches[0];
 }
 
+const char* OpSym(sql::BinOp op) {
+    switch (op) {
+        case sql::BinOp::kEq: return "=";
+        case sql::BinOp::kNe: return "!=";
+        case sql::BinOp::kLt: return "<";
+        case sql::BinOp::kLe: return "<=";
+        case sql::BinOp::kGt: return ">";
+        case sql::BinOp::kGe: return ">=";
+        case sql::BinOp::kAnd: return "AND";
+        case sql::BinOp::kOr: return "OR";
+        case sql::BinOp::kAdd: return "+";
+        case sql::BinOp::kSub: return "-";
+        case sql::BinOp::kMul: return "*";
+        case sql::BinOp::kDiv: return "/";
+    }
+    return "?";
+}
+
+/// Canonical textual form of an aggregate argument, used to name and dedup
+/// aggregates. A bare column keeps its short name (no alias) for backward
+/// compatibility; arithmetic is rendered fully parenthesized.
+std::string ExprToString(const sql::Expr* e) {
+    if (const auto* c = dynamic_cast<const sql::ColumnRefExpr*>(e)) return c->column_name;
+    if (const auto* l = dynamic_cast<const sql::LiteralExpr*>(e)) return ValueToString(l->value);
+    if (const auto* b = dynamic_cast<const sql::BinaryExpr*>(e))
+        return "(" + ExprToString(b->left.get()) + " " + OpSym(b->op) + " " +
+               ExprToString(b->right.get()) + ")";
+    return "?";
+}
+
 std::string AggName(const sql::AggregateExpr& a) {
-    auto arg = [&]() -> std::string {
-        const auto* c = dynamic_cast<const sql::ColumnRefExpr*>(a.argument.get());
-        if (!c) Fail("aggregate argument must be a column");
-        return c->column_name;
-    };
+    auto arg = [&]() -> std::string { return ExprToString(a.argument.get()); };
     switch (a.kind) {
         case sql::AggKind::kCountStar:
             return "COUNT(*)";
@@ -66,6 +92,31 @@ std::string AggName(const sql::AggregateExpr& a) {
             return "MAX(" + arg() + ")";
     }
     return "?";
+}
+
+/// Infers the scalar type a bound expression evaluates to (used to pick
+/// integer vs floating accumulators for SUM/AVG over arithmetic arguments).
+ColumnType InferBoundType(const BoundExpr& e) {
+    switch (e.op) {
+        case BoundOp::kColumn:
+            return e.col_type;
+        case BoundOp::kLiteral:
+            if (std::holds_alternative<double>(e.literal)) return ColumnType::kFloat;
+            if (std::holds_alternative<std::int64_t>(e.literal)) return ColumnType::kBigInt;
+            if (std::holds_alternative<std::string>(e.literal)) return ColumnType::kVarchar;
+            return ColumnType::kInt;
+        case BoundOp::kAdd:
+        case BoundOp::kSub:
+        case BoundOp::kMul:
+        case BoundOp::kDiv: {
+            const ColumnType lt = InferBoundType(*e.left);
+            const ColumnType rt = InferBoundType(*e.right);
+            return (lt == ColumnType::kFloat || rt == ColumnType::kFloat) ? ColumnType::kFloat
+                                                                          : ColumnType::kBigInt;
+        }
+        default:
+            return ColumnType::kInt;  // comparisons / logic produce 0/1
+    }
 }
 
 BoundOp ToBoundOp(sql::BinOp op) {
@@ -86,6 +137,14 @@ BoundOp ToBoundOp(sql::BinOp op) {
             return BoundOp::kAnd;
         case sql::BinOp::kOr:
             return BoundOp::kOr;
+        case sql::BinOp::kAdd:
+            return BoundOp::kAdd;
+        case sql::BinOp::kSub:
+            return BoundOp::kSub;
+        case sql::BinOp::kMul:
+            return BoundOp::kMul;
+        case sql::BinOp::kDiv:
+            return BoundOp::kDiv;
     }
     return BoundOp::kEq;
 }
@@ -393,10 +452,8 @@ std::unique_ptr<Operator> PlanSelect(const sql::SelectStmt& stmt, const Catalog&
             if (a->kind == sql::AggKind::kCountStar) {
                 spec.output_type = ColumnType::kBigInt;
             } else {
-                const auto* col = dynamic_cast<const sql::ColumnRefExpr*>(a->argument.get());
-                const std::size_t idx = Resolve(combined_names, col->table_alias, col->column_name);
-                spec.input_index = idx;
-                spec.input_type = combined_types[idx];
+                spec.input_expr = Bind(a->argument.get(), combined_names, combined_types);
+                spec.input_type = InferBoundType(*spec.input_expr);
                 switch (a->kind) {
                     case sql::AggKind::kCount:
                         spec.output_type = ColumnType::kBigInt;

@@ -21,6 +21,10 @@ enum class BoundOp : std::uint8_t {
     kAnd,
     kOr,
     kNot,
+    kAdd,
+    kSub,
+    kMul,
+    kDiv,
 };
 
 /**

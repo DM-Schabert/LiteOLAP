@@ -46,6 +46,41 @@ bool ValueTruthy(const Value& v) {
 
 namespace {
 
+bool IsFloat(const Value& v) { return std::holds_alternative<double>(v); }
+double AsDouble(const Value& v) {
+    if (std::holds_alternative<double>(v)) return std::get<double>(v);
+    if (std::holds_alternative<std::int64_t>(v)) return static_cast<double>(std::get<std::int64_t>(v));
+    return static_cast<double>(std::get<std::int32_t>(v));
+}
+std::int64_t AsI64(const Value& v) {
+    if (std::holds_alternative<std::int64_t>(v)) return std::get<std::int64_t>(v);
+    return std::get<std::int32_t>(v);
+}
+
+/// Numeric arithmetic with null propagation. Promotes to double if either
+/// operand is floating; integer division/modulo by zero yields NULL.
+Value ArithResult(BoundOp op, const Value& l, const Value& r) {
+    if (IsNull(l) || IsNull(r)) return Value{Null{}};
+    if (IsFloat(l) || IsFloat(r)) {
+        const double a = AsDouble(l), b = AsDouble(r);
+        switch (op) {
+            case BoundOp::kAdd: return Value{a + b};
+            case BoundOp::kSub: return Value{a - b};
+            case BoundOp::kMul: return Value{a * b};
+            case BoundOp::kDiv: return b == 0.0 ? Value{Null{}} : Value{a / b};
+            default: throw std::logic_error("ArithResult: not arithmetic");
+        }
+    }
+    const std::int64_t a = AsI64(l), b = AsI64(r);
+    switch (op) {
+        case BoundOp::kAdd: return Value{a + b};
+        case BoundOp::kSub: return Value{a - b};
+        case BoundOp::kMul: return Value{a * b};
+        case BoundOp::kDiv: return b == 0 ? Value{Null{}} : Value{a / b};
+        default: throw std::logic_error("ArithResult: not arithmetic");
+    }
+}
+
 Value CompareResult(BoundOp op, const Value& l, const Value& r) {
     if (IsNull(l) || IsNull(r)) return Value{std::int32_t{0}};
     const Ordering c = CompareValues(l, r);
@@ -93,6 +128,12 @@ Value EvalExprRow(const BoundExpr& e, const DataChunk& chunk, std::size_t row) {
             if (ValueTruthy(EvalExprRow(*e.left, chunk, row))) return Value{std::int32_t{1}};
             return Value{std::int32_t{ValueTruthy(EvalExprRow(*e.right, chunk, row)) ? 1 : 0}};
         }
+        case BoundOp::kAdd:
+        case BoundOp::kSub:
+        case BoundOp::kMul:
+        case BoundOp::kDiv:
+            return ArithResult(e.op, EvalExprRow(*e.left, chunk, row),
+                               EvalExprRow(*e.right, chunk, row));
         default:
             return CompareResult(e.op, EvalExprRow(*e.left, chunk, row),
                                  EvalExprRow(*e.right, chunk, row));

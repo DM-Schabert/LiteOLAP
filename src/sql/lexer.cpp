@@ -72,8 +72,19 @@ std::vector<Token> Tokenize(std::string_view sql) {
             out.push_back(Token{TokenKind::kString, std::move(s), 0, 0.0});
             continue;
         }
+        // A leading '-' starts a negative literal only where a value is not
+        // already on the left (e.g. after '=', '(', ','); otherwise it is the
+        // binary subtraction operator handled by the punct branch below.
+        auto prev_is_value = [&]() {
+            if (out.empty()) return false;
+            const Token& p = out.back();
+            return p.kind == TokenKind::kIdentifier || p.kind == TokenKind::kInteger ||
+                   p.kind == TokenKind::kFloat || p.kind == TokenKind::kString ||
+                   (p.kind == TokenKind::kPunct && p.text == ")");
+        };
         if (std::isdigit(static_cast<unsigned char>(c)) ||
-            (c == '-' && i + 1 < n && std::isdigit(static_cast<unsigned char>(sql[i + 1])))) {
+            (c == '-' && i + 1 < n && std::isdigit(static_cast<unsigned char>(sql[i + 1])) &&
+             !prev_is_value())) {
             const std::size_t start = i;
             if (c == '-') ++i;
             while (i < n && std::isdigit(static_cast<unsigned char>(sql[i]))) ++i;
@@ -130,7 +141,7 @@ std::vector<Token> Tokenize(std::string_view sql) {
             i += 2;
             continue;
         }
-        if (std::string("(),;*=<>.").find(c) != std::string::npos) {
+        if (std::string("(),;*=<>.+-/").find(c) != std::string::npos) {
             out.push_back(Token{TokenKind::kPunct, std::string(1, c), 0, 0.0});
             ++i;
             continue;

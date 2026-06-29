@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "common/value.h"
+#include "execution/expression.h"
 #include "execution/operator.h"
 #include "sql/ast.h"
 
@@ -15,7 +16,7 @@ namespace liteolap {
 /// One aggregate to compute.
 struct AggSpec {
     sql::AggKind kind;
-    std::size_t input_index{0};      ///< child output column (unused for COUNT(*))
+    std::shared_ptr<BoundExpr> input_expr;  ///< per-row argument (null for COUNT(*))
     ColumnType input_type{ColumnType::kInt};
     ColumnType output_type{ColumnType::kBigInt};
     std::string output_name;
