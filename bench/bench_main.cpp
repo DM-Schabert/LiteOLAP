@@ -27,8 +27,8 @@ using namespace std::chrono;
 
 namespace {
 
-constexpr int kLineitems = 10'000'000;
-constexpr int kParts = 500'000;
+constexpr int kLineitems = 1'000'000;
+constexpr int kParts = 50'000;
 
 double Seconds(steady_clock::time_point a, steady_clock::time_point b) {
     return duration<double>(b - a).count();
@@ -53,18 +53,32 @@ int main() {
 
     std::mt19937_64 rng(123);
 
+    constexpr int kBatchSize = 1000;
+
     auto t0 = steady_clock::now();
-    for (int i = 0; i < kLineitems; ++i) {
-        const int partkey = static_cast<int>(rng() % kParts);
-        const int qty = static_cast<int>(rng() % 50) + 1;
-        const double price = static_cast<double>(rng() % 100000) / 100.0;
-        const double disc = static_cast<double>(rng() % 10) / 100.0;
-        db->Execute("INSERT INTO lineitem VALUES (" + std::to_string(i) + ", " +
-                    std::to_string(partkey) + ", " + std::to_string(qty) + ", " +
-                    std::to_string(price) + ", " + std::to_string(disc) + ", '" + Flag(i) + "')");
+    for (int base = 0; base < kLineitems; base += kBatchSize) {
+        const int end = std::min(base + kBatchSize, kLineitems);
+        std::string sql = "INSERT INTO lineitem VALUES ";
+        for (int i = base; i < end; ++i) {
+            if (i > base) sql += ", ";
+            const int partkey = static_cast<int>(rng() % kParts);
+            const int qty = static_cast<int>(rng() % 50) + 1;
+            const double price = static_cast<double>(rng() % 100000) / 100.0;
+            const double disc = static_cast<double>(rng() % 10) / 100.0;
+            sql += "(" + std::to_string(i) + ", " + std::to_string(partkey) + ", " +
+                   std::to_string(qty) + ", " + std::to_string(price) + ", " +
+                   std::to_string(disc) + ", '" + Flag(i) + "')";
+        }
+        db->Execute(sql);
     }
-    for (int i = 0; i < kParts; ++i) {
-        db->Execute("INSERT INTO part VALUES (" + std::to_string(i) + ", '" + Brand(i) + "')");
+    for (int base = 0; base < kParts; base += kBatchSize) {
+        const int end = std::min(base + kBatchSize, kParts);
+        std::string sql = "INSERT INTO part VALUES ";
+        for (int i = base; i < end; ++i) {
+            if (i > base) sql += ", ";
+            sql += "(" + std::to_string(i) + ", '" + Brand(i) + "')";
+        }
+        db->Execute(sql);
     }
     auto t1 = steady_clock::now();
     const double load_rps = (kLineitems + kParts) / Seconds(t0, t1);

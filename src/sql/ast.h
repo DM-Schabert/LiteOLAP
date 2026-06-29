@@ -91,7 +91,7 @@ struct TruncateStmt : Statement {
 
 struct InsertStmt : Statement {
     std::string table_name;
-    std::vector<Value> values;
+    std::vector<std::vector<Value>> rows;
 };
 
 struct SelectStmt : Statement {

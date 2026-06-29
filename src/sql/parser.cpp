@@ -338,10 +338,14 @@ class Parser {
         auto s = std::make_unique<InsertStmt>();
         s->table_name = ExpectIdent();
         ExpectKw("VALUES");
-        ExpectPunct("(");
-        s->values.push_back(ParseLiteral());
-        while (MatchPunct(",")) s->values.push_back(ParseLiteral());
-        ExpectPunct(")");
+        do {
+            ExpectPunct("(");
+            std::vector<Value> row;
+            row.push_back(ParseLiteral());
+            while (MatchPunct(",")) row.push_back(ParseLiteral());
+            ExpectPunct(")");
+            s->rows.push_back(std::move(row));
+        } while (MatchPunct(","));
         ExpectEnd();
         return s;
     }

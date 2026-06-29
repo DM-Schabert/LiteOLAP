@@ -134,13 +134,15 @@ ResultSet DB::Execute(std::string_view sql) {
     if (const auto* ins = dynamic_cast<sql::InsertStmt*>(stmt.get())) {
         TableMeta* meta = catalog_.GetTable(ins->table_name);
         if (!meta) throw std::runtime_error("unknown table: " + ins->table_name);
-        if (ins->values.size() != meta->schema.NumColumns())
-            throw std::runtime_error("INSERT: value count does not match column count");
         auto& cols = pending_[ins->table_name];
         if (cols.size() != meta->schema.NumColumns())
             cols.assign(meta->schema.NumColumns(), {});
-        for (std::size_t i = 0; i < ins->values.size(); ++i) {
-            cols[i].push_back(Coerce(ins->values[i], meta->schema.GetColumn(i).type));
+        for (const auto& row : ins->rows) {
+            if (row.size() != meta->schema.NumColumns())
+                throw std::runtime_error("INSERT: value count does not match column count");
+            for (std::size_t i = 0; i < row.size(); ++i) {
+                cols[i].push_back(Coerce(row[i], meta->schema.GetColumn(i).type));
+            }
         }
         return {};
     }
